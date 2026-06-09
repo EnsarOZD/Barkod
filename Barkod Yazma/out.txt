@@ -1,0 +1,11 @@
+﻿  Geri y├╝klenecek projeler belirleniyor...
+  Geri y├╝kleme i├ğin t├╝m projeler g├╝ncel.
+D:\vue\Barkod Yazma\Program.cs(64,1): error CS8803: ├£st d├╝zey deyimler ad alan─▒ ve t├╝r bildirimlerinden ├Ânce gelmelidir. [D:\vue\Barkod Yazma\DepoPrintApp.csproj]
+
+Olu┼şturma BA┼ŞARISIZ OLDU.
+
+D:\vue\Barkod Yazma\Program.cs(64,1): error CS8803: ├£st d├╝zey deyimler ad alan─▒ ve t├╝r bildirimlerinden ├Ânce gelmelidir. [D:\vue\Barkod Yazma\DepoPrintApp.csproj]
+    0 Uyar─▒
+    1 Hata
+
+Ge├ğen S├╝re 00:00:00.81
