@@ -4,35 +4,35 @@ using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
-
+ 
 namespace AkyildizKargoEtiket;
-
+ 
 // ── API DTOs ─────────────────────────────────────────────────────────────────
-
+ 
 public record RegisterRequest(string AgentKey, string MachineName, string DisplayName, List<string> InstalledPrinters);
 public record PendingJob(int Id, int LabelType, string PayloadJson, string PrinterName);
 public record UpdateStatusRequest(int Status, string? ErrorMessage);
 public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
-
+ 
 // ── Print Service ─────────────────────────────────────────────────────────────
-
+ 
 public class PrintAgentService
 {
     private readonly HttpClient _http;
     private readonly AgentOptions _opts;
     private readonly ILogger<PrintAgentService> _log;
-
+ 
     public PrintAgentService(HttpClient http, IOptions<AgentOptions> opts, ILogger<PrintAgentService> log)
     {
         _http = http;
         _opts = opts.Value;
         _log  = log;
-
+ 
         _http.BaseAddress = new Uri(_opts.ServerUrl.TrimEnd('/') + "/");
         _http.Timeout     = TimeSpan.FromSeconds(10);
     }
-
+ 
     public List<string> GetInstalledPrinters()
     {
         var printers = new List<string>();
@@ -40,7 +40,7 @@ public class PrintAgentService
             printers.Add(printer);
         return printers;
     }
-
+ 
     public async Task RegisterAsync(CancellationToken ct)
     {
         var req = new RegisterRequest(
@@ -48,27 +48,27 @@ public class PrintAgentService
             Environment.MachineName,
             _opts.DisplayName,
             GetInstalledPrinters());
-
+ 
         var resp = await _http.PostAsJsonAsync("print/agents/register", req, ct);
         if (!resp.IsSuccessStatusCode)
             _log.LogWarning("Kayıt başarısız: {Status}", resp.StatusCode);
         else
             _log.LogInformation("Agent kaydedildi.");
     }
-
+ 
     public async Task<List<PendingJob>> GetPendingJobsAsync(CancellationToken ct)
     {
         var resp = await _http.GetAsync($"print/jobs/pending?agentKey={Uri.EscapeDataString(_opts.AgentKey)}", ct);
         if (!resp.IsSuccessStatusCode) return [];
         return await resp.Content.ReadFromJsonAsync<List<PendingJob>>(ct) ?? [];
     }
-
+ 
     public async Task UpdateJobStatusAsync(int jobId, int status, string? error, CancellationToken ct)
     {
         var req = new UpdateStatusRequest(status, error);
         await _http.PatchAsJsonAsync($"print/jobs/{jobId}/status?agentKey={Uri.EscapeDataString(_opts.AgentKey)}", req, ct);
     }
-
+ 
     public void PrintJob(PendingJob job)
     {
         string zpl = job.LabelType switch
@@ -77,26 +77,26 @@ public class PrintAgentService
             1 => BuildBoxZpl(job),
             _ => throw new InvalidOperationException($"Bilinmeyen etiket tipi: {job.LabelType}")
         };
-
+ 
         SendZplToPrinter(job.PrinterName, zpl);
         _log.LogInformation("Baskı tamamlandı: Job#{Id} → {Printer}", job.Id, job.PrinterName);
     }
-
+ 
     // ── ZPL Builders ─────────────────────────────────────────────────────────
-
+ 
     private static string BuildCargoZpl(PendingJob job)
     {
         var p = JsonSerializer.Deserialize<CargoLabelPayload>(job.PayloadJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
-
+ 
         // Alıcı adını 25 karakterde kes — etiket taşmasın
         var name    = Truncate(p.ReceiverName, 28);
         var address = Truncate(p.Address,      40);
         var phone   = Truncate(p.Phone,        20);
-
+ 
         return $@"^XA
-^CI31
+^CI28
 ^PW609
 ^LL406
 ^FO20,15^BY3^BCN,70,N,N,N^FD{p.Barcode}^FS
@@ -113,19 +113,19 @@ public class PrintAgentService
 ^FO400,288^A0N,20,20^FDYURTIÇI KARGO^FS
 ^XZ";
     }
-
+ 
     private static string BuildBoxZpl(PendingJob job)
     {
         var p = JsonSerializer.Deserialize<BoxLabelPayload>(job.PayloadJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Koli payload parse edilemedi.");
-
+ 
         var name = Truncate(p.ProjectName.ToUpperInvariant(), 18);
         var loc  = Truncate(p.Location.ToUpperInvariant(),    18);
         var code = $"{p.ProjectCode} ({p.BoxCount} KOLİ)";
-
+ 
         return $@"^XA
-^CI31
+^CI28
 ^PW800
 ^LL640
 ^CF0,80
@@ -136,9 +136,9 @@ public class PrintAgentService
 ^FO{CenterX(code, 800, 37)},400^FD{code}^FS
 ^XZ";
     }
-
+ 
     // ── Win32 Raw Print ───────────────────────────────────────────────────────
-
+ 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     private class DOCINFOA
     {
@@ -146,44 +146,48 @@ public class PrintAgentService
         [MarshalAs(UnmanagedType.LPStr)] public string? pOutputFile;
         [MarshalAs(UnmanagedType.LPStr)] public string pDataType = "RAW";
     }
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA",     SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string sz, out IntPtr h, IntPtr pd);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "ClosePrinter",     SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool ClosePrinter(IntPtr h);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool StartDocPrinter(IntPtr h, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter",    SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool EndDocPrinter(IntPtr h);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool StartPagePrinter(IntPtr h);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter",   SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool EndPagePrinter(IntPtr h);
-
+ 
     [DllImport("winspool.Drv", EntryPoint = "WritePrinter",     SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool WritePrinter(IntPtr h, IntPtr pBytes, int dwCount, out int dwWritten);
-
+ 
     private static void SendZplToPrinter(string printerName, string zpl)
     {
-        // ZPL → Windows-1254 (Türkçe) — ^CI31 ile eşleşir
-        var bytes = Encoding.GetEncoding(1254).GetBytes(zpl);
-
+        // ZPL → UTF-8 (^CI28 ile eşleşir). NOT: GetEncoding(1254) .NET 10'da
+        // System.Text.Encoding.CodePages kaydı olmadan fırlatır ("No data is
+        // available for encoding 1254") — canlıdaki tüm baskı hatalarının kökü
+        // buydu. UTF-8 hem bu bağımlılığı kaldırır hem Türkçe karakterleri
+        // (İ, Ş, Ğ) Font 0 ile doğru basar.
+        var bytes = Encoding.UTF8.GetBytes(zpl);
+ 
         if (!OpenPrinter(printerName, out IntPtr hPrinter, IntPtr.Zero))
             throw new InvalidOperationException($"Yazıcı açılamadı: {printerName} (Hata: {Marshal.GetLastWin32Error()})");
-
+ 
         try
         {
             var di = new DOCINFOA();
             if (!StartDocPrinter(hPrinter, 1, di))
                 throw new InvalidOperationException($"StartDocPrinter başarısız (Hata: {Marshal.GetLastWin32Error()})");
-
+ 
             StartPagePrinter(hPrinter);
-
+ 
             var pBytes = Marshal.AllocCoTaskMem(bytes.Length);
             try
             {
@@ -195,7 +199,7 @@ public class PrintAgentService
             {
                 Marshal.FreeCoTaskMem(pBytes);
             }
-
+ 
             EndPagePrinter(hPrinter);
             EndDocPrinter(hPrinter);
         }
@@ -204,12 +208,12 @@ public class PrintAgentService
             ClosePrinter(hPrinter);
         }
     }
-
+ 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
+ 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
-
+ 
     private static int CenterX(string text, int labelWidth, int charWidth) =>
         Math.Max(0, (labelWidth - text.Length * charWidth) / 2);
 }
