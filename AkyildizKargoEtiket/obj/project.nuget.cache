@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "fIbGHpB/Rwk=",
+  "dgSpecHash": "WU6UZbRnoOk=",
   "success": true,
-  "projectFilePath": "D:\\vue\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
+  "projectFilePath": "D:\\Barkod Yazma\\Barkod\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\ensar\\.nuget\\packages\\microsoft.extensions.configuration\\10.0.8\\microsoft.extensions.configuration.10.0.8.nupkg.sha512",
     "C:\\Users\\ensar\\.nuget\\packages\\microsoft.extensions.configuration.abstractions\\10.0.8\\microsoft.extensions.configuration.abstractions.10.0.8.nupkg.sha512",
@@ -37,19 +37,16 @@
     "C:\\Users\\ensar\\.nuget\\packages\\system.diagnostics.eventlog\\10.0.8\\system.diagnostics.eventlog.10.0.8.nupkg.sha512",
     "C:\\Users\\ensar\\.nuget\\packages\\system.drawing.common\\9.0.5\\system.drawing.common.9.0.5.nupkg.sha512",
     "C:\\Users\\ensar\\.nuget\\packages\\system.serviceprocess.servicecontroller\\10.0.8\\system.serviceprocess.servicecontroller.10.0.8.nupkg.sha512",
-    "C:\\Users\\ensar\\.nuget\\packages\\system.text.json\\10.0.8\\system.text.json.10.0.8.nupkg.sha512",
-    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.0\\microsoft.netcore.app.runtime.win-x64.10.0.0.nupkg.sha512",
-    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.0\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.0.nupkg.sha512",
-    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.0\\microsoft.aspnetcore.app.runtime.win-x64.10.0.0.nupkg.sha512"
+    "C:\\Users\\ensar\\.nuget\\packages\\system.text.json\\10.0.8\\system.text.json.10.0.8.nupkg.sha512"
   ],
   "logs": [
     {
       "code": "NU1510",
       "level": "Warning",
       "message": "PackageReference System.Text.Json ayıklanmayacak. Bu paketi bağımlılıklarınızdan kaldırmayı düşünün, çünkü muhtemelen gereksizdir.",
-      "projectPath": "D:\\vue\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
+      "projectPath": "D:\\Barkod Yazma\\Barkod\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
       "warningLevel": 1,
-      "filePath": "D:\\vue\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
+      "filePath": "D:\\Barkod Yazma\\Barkod\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
       "libraryId": "System.Text.Json",
       "targetGraphs": [
         "net10.0"
