@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AkyildizKargoEtiket")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+03e6f20c9783b7977a508ae719606891bb0afa91")]
 [assembly: System.Reflection.AssemblyProductAttribute("AkyildizKargoEtiket")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AkyildizKargoEtiket")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
