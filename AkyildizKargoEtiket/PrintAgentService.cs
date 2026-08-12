@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using System.Drawing.Printing;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -14,6 +15,7 @@ public record PendingJob(int Id, int LabelType, string PayloadJson, string Print
 public record UpdateStatusRequest(int Status, string? ErrorMessage);
 public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
+public record PalletLabelPayload(string PalletCode, string ReceivedDate, string? SupplierName, int LineCount, decimal TotalQty);
  
 // ── Print Service ─────────────────────────────────────────────────────────────
  
@@ -75,6 +77,7 @@ public class PrintAgentService
         {
             0 => BuildCargoZpl(job),
             1 => BuildBoxZpl(job),
+            2 => BuildPalletZpl(job),
             _ => throw new InvalidOperationException($"Bilinmeyen etiket tipi: {job.LabelType}")
         };
  
@@ -136,6 +139,61 @@ public class PrintAgentService
 ^FO{CenterX(code, 800, 37)},400^FD{code}^FS
 ^XZ";
     }
+
+    /// <summary>
+    /// Palet etiketi — 100 x 80 mm (800 x 640 dot @ 203 dpi), koli etiketiyle aynı rulo.
+    /// Yerleşim: palet no (dev punto) · teslim tarihi · Code128 · içerik özeti · tedarikçi.
+    /// Tarama hedefi barkodun içeriği = PalletCode'un kendisi (parse yok).
+    /// </summary>
+    private static string BuildPalletZpl(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<PalletLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Palet payload parse edilemedi.");
+
+        if (string.IsNullOrWhiteSpace(p.PalletCode))
+            throw new InvalidDataException("Palet kodu boş — etiket basılamaz.");
+
+        var code    = p.PalletCode.Trim().ToUpperInvariant();
+        var summary = $"{p.LineCount} KALEM · {FormatQty(p.TotalQty)} ADET";
+
+        // Tedarikçi adı Türkçe büyük harf: ToUpperInvariant "i" → "I" verir, doğrusu "İ".
+        // ^CI28 + UTF-8 zaten Türkçe karakterleri basıyor (bkz. SendZplToPrinter notu).
+        var supplierRaw = (p.SupplierName ?? string.Empty).Trim();
+        var supplier    = supplierRaw.Length == 0
+            ? string.Empty
+            : Truncate(supplierRaw.ToUpper(TurkishCulture), 32);
+
+        // Palet kodu punto: uzun kod 110'da taşıyor (10 karakter x 81 dot = 810 > 800).
+        // Sığan en büyük puntoyu seç — kod hiçbir zaman kırpılmaz, küçülür.
+        var (codeFont, codeCharW) = FitFont(code, 720, 110, 92, 76, 62);
+
+        // Barkod modül genişliği: etikete sığana kadar 4 → 2 arası daralt.
+        int module = 4;
+        while (module > 2 && Code128Width(code, module) > 740) module--;
+        int barcodeX = Math.Max(30, (800 - Code128Width(code, module)) / 2);
+
+        return $@"^XA
+^CI28
+^PW800
+^LL640
+^CF0,{codeFont}
+^FO{CenterX(code, 800, codeCharW)},{30 + (110 - codeFont) / 2}^FD{code}^FS
+^FO40,158^GB720,3,3^FS
+^CF0,46
+^FO{CenterX(p.ReceivedDate, 800, 34)},178^FD{p.ReceivedDate}^FS
+^FO{barcodeX},248^BY{module}^BCN,160,N,N,N^FD{code}^FS
+^FO40,432^GB720,3,3^FS
+^CF0,34
+^FO{CenterX(summary, 800, 25)},452^FD{summary}^FS{SupplierBlock(supplier)}
+^XZ";
+    }
+
+    /// <summary>Tedarikçi satırı — ad boşsa hiç alan üretme (boş ^FD^FS bırakma).</summary>
+    private static string SupplierBlock(string supplier) =>
+        supplier.Length == 0
+            ? string.Empty
+            : $"\n^CF0,30\n^FO{CenterX(supplier, 800, 22)},502^FD{supplier}^FS";
  
     // ── Win32 Raw Print ───────────────────────────────────────────────────────
  
@@ -211,9 +269,38 @@ public class PrintAgentService
  
     // ── Helpers ───────────────────────────────────────────────────────────────
  
+    private static readonly CultureInfo TurkishCulture = CultureInfo.GetCultureInfo("tr-TR");
+
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
  
     private static int CenterX(string text, int labelWidth, int charWidth) =>
         Math.Max(0, (labelWidth - text.Length * charWidth) / 2);
+
+    /// <summary>
+    /// Code128 baskı genişliği (dot). Subset B varsayımı: veri karakteri başına 11 modül,
+    /// artı start (11) + checksum (11) + stop (13). Üst sınır verir — ortalama için yeterli.
+    /// </summary>
+    private static int Code128Width(string data, int moduleWidth) =>
+        (11 * (data.Length + 2) + 13) * moduleWidth;
+
+    /// <summary>Tam sayıysa ondalık gösterme: 120 → "120", 12,5 → "12,5".</summary>
+    private static string FormatQty(decimal qty) =>
+        qty == Math.Floor(qty) ? ((long)qty).ToString() : qty.ToString("0.##");
+
+    /// <summary>
+    /// Verilen punto merdiveninden metnin <paramref name="maxWidth"/> dot'a sığdığı
+    /// en büyüğünü seçer; hiçbiri sığmazsa en küçüğünü döner (metin kırpılmaz).
+    /// Font 0 için karakter genişliği ≈ punto x 0,74 (mevcut etiketlerin oranı).
+    /// </summary>
+    private static (int Font, int CharWidth) FitFont(string text, int maxWidth, params int[] ladder)
+    {
+        foreach (var font in ladder)
+        {
+            int charWidth = (int)Math.Round(font * 0.74);
+            if (text.Length * charWidth <= maxWidth) return (font, charWidth);
+        }
+        int smallest = ladder[^1];
+        return (smallest, (int)Math.Round(smallest * 0.74));
+    }
 }
