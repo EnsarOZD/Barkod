@@ -30,9 +30,41 @@ public class PrintAgentService
         _http = http;
         _opts = opts.Value;
         _log  = log;
- 
+
+        ValidateOptions(_opts);
+
         _http.BaseAddress = new Uri(_opts.ServerUrl.TrimEnd('/') + "/");
         _http.Timeout     = TimeSpan.FromSeconds(10);
+    }
+
+    /// <summary>
+    /// Açılışta yapılandırmayı doğrular; hata varsa servis hiç başlamaz.
+    ///
+    /// Neden gerekli: <c>POST print/agents/register</c> anonim ve HERHANGİ bir AgentKey'i
+    /// kabul edip yeni bir agent satırı açıyor. Güncelleme sırasında depo PC'sindeki
+    /// appsettings.json yayın klasöründeki şablonla EZİLİRSE, agent placeholder anahtarla
+    /// kendini yeni bir agent olarak kaydeder; PrinterConfig kayıtları eski agent'a bağlı
+    /// kaldığı için <c>jobs/pending</c> sonsuza kadar boş döner. Hiçbir yerde hata görünmez,
+    /// etiketler sessizce basılmaz. Bu kontrol o senaryoyu gürültülü hâle getirir.
+    /// </summary>
+    private static void ValidateOptions(AgentOptions o)
+    {
+        if (string.IsNullOrWhiteSpace(o.ServerUrl))
+            throw new InvalidOperationException(
+                "Agent:ServerUrl boş. appsettings.json eksik ya da doldurulmamış olabilir.");
+
+        if (!Uri.TryCreate(o.ServerUrl, UriKind.Absolute, out _))
+            throw new InvalidOperationException($"Agent:ServerUrl geçerli bir adres değil: '{o.ServerUrl}'");
+
+        if (string.IsNullOrWhiteSpace(o.AgentKey) || o.AgentKey.Contains("BURAYA", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Agent:AgentKey doldurulmamış (şablon değeri duruyor). Depo PC'sindeki appsettings.json " +
+                "güncelleme sırasında ezilmiş olabilir — eski AgentKey'i geri yazın. " +
+                "Yanlış anahtarla çalışırsa agent kendini YENİ bir agent olarak kaydeder ve " +
+                "yazıcı tanımları eski agent'ta kaldığı için hiçbir iş gelmez.");
+
+        if (o.PollIntervalSeconds < 1)
+            throw new InvalidOperationException("Agent:PollIntervalSeconds en az 1 olmalı.");
     }
  
     public List<string> GetInstalledPrinters()

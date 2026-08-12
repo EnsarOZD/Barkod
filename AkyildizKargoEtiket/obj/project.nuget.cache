@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "WU6UZbRnoOk=",
+  "dgSpecHash": "kN79pAdxYm0=",
   "success": true,
   "projectFilePath": "D:\\Barkod Yazma\\Barkod\\AkyildizKargoEtiket\\AkyildizKargoEtiket.csproj",
   "expectedPackageFiles": [
@@ -37,7 +37,10 @@
     "C:\\Users\\ensar\\.nuget\\packages\\system.diagnostics.eventlog\\10.0.8\\system.diagnostics.eventlog.10.0.8.nupkg.sha512",
     "C:\\Users\\ensar\\.nuget\\packages\\system.drawing.common\\9.0.5\\system.drawing.common.9.0.5.nupkg.sha512",
     "C:\\Users\\ensar\\.nuget\\packages\\system.serviceprocess.servicecontroller\\10.0.8\\system.serviceprocess.servicecontroller.10.0.8.nupkg.sha512",
-    "C:\\Users\\ensar\\.nuget\\packages\\system.text.json\\10.0.8\\system.text.json.10.0.8.nupkg.sha512"
+    "C:\\Users\\ensar\\.nuget\\packages\\system.text.json\\10.0.8\\system.text.json.10.0.8.nupkg.sha512",
+    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.0\\microsoft.netcore.app.runtime.win-x64.10.0.0.nupkg.sha512",
+    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.0\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.0.nupkg.sha512",
+    "C:\\Users\\ensar\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.0\\microsoft.aspnetcore.app.runtime.win-x64.10.0.0.nupkg.sha512"
   ],
   "logs": [
     {

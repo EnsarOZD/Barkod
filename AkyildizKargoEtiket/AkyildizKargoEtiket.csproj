@@ -5,6 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-AkyildizKargoEtiket-0bc9cd2f-d9ec-42e4-a8a8-516b2a265686</UserSecretsId>
+
+    <!--
+      Yayin klasoru proje dizininin ICINDE (publish\). Varsayilan item glob'lari
+      "**/*" oldugu icin onceki yayinin ciktisi bir sonraki yayinin GIRDISI olarak
+      toplaniyordu: MSBuild publish\appsettings.json'i publish\publish\ altina
+      kopyalamaya calisip "dosya bulunamadi / baska islem kullaniyor" hatalari
+      veriyordu. Klasoru glob disi birakmak dongumu kirar.
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);publish\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
