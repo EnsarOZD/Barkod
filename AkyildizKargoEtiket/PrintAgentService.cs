@@ -11,7 +11,8 @@ namespace AkyildizKargoEtiket;
 // ── API DTOs ─────────────────────────────────────────────────────────────────
  
 public record RegisterRequest(string AgentKey, string MachineName, string DisplayName, List<string> InstalledPrinters);
-public record PendingJob(int Id, int LabelType, string PayloadJson, string PrinterName);
+/// <summary><c>Language</c>: 0 = ZPL, 1 = EPL. Eski API sürümü bu alanı göndermezse 0 kalır.</summary>
+public record PendingJob(int Id, int LabelType, string PayloadJson, string PrinterName, int Language = 0);
 public record UpdateStatusRequest(int Status, string? ErrorMessage);
 public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
@@ -105,16 +106,27 @@ public class PrintAgentService
  
     public void PrintJob(PendingJob job)
     {
-        string zpl = job.LabelType switch
+        // Şablon (etiket tipi, yazıcı dili) çiftine göre seçilir. Dil yazıcının
+        // fiziksel özelliği: ZPL bilmeyen bir cihaza (ör. Zebra LP2844) ZPL gönderilirse
+        // cihaz komutları sessizce yutar — iş "başarılı" görünür, kâğıt çıkmaz.
+        string data = (job.LabelType, job.Language) switch
         {
-            0 => BuildCargoZpl(job),
-            1 => BuildBoxZpl(job),
-            2 => BuildPalletZpl(job),
-            _ => throw new InvalidOperationException($"Bilinmeyen etiket tipi: {job.LabelType}")
+            (0, 0) => BuildCargoZpl(job),
+            (1, 0) => BuildBoxZpl(job),
+            (2, 0) => BuildPalletZpl(job),
+
+            (0, 1) => BuildCargoEpl(job),
+            (1, 1) => BuildBoxEpl(job),
+            (2, 1) => BuildPalletEpl(job),
+
+            _ => throw new InvalidOperationException(
+                $"Desteklenmeyen kombinasyon: etiket tipi {job.LabelType}, dil " +
+                (job.Language == 1 ? "EPL" : "ZPL"))
         };
- 
-        SendZplToPrinter(job.PrinterName, zpl);
-        _log.LogInformation("Baskı tamamlandı: Job#{Id} → {Printer}", job.Id, job.PrinterName);
+
+        SendRawToPrinter(job.PrinterName, data, job.Language == 1);
+        _log.LogInformation("Baskı tamamlandı: Job#{Id} → {Printer} ({Lang})",
+            job.Id, job.PrinterName, job.Language == 1 ? "EPL" : "ZPL");
     }
  
     // ── ZPL Builders ─────────────────────────────────────────────────────────
@@ -227,6 +239,273 @@ public class PrintAgentService
             ? string.Empty
             : $"\n^CF0,30\n^FO{CenterX(supplier, 800, 22)},502^FD{supplier}^FS";
  
+    // ── EPL Builders ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Palet etiketi — EPL2. ZPL bilmeyen cihazlar için: Zebra LP2844 yalnızca EPL konuşur,
+    /// ZPL komutlarını sessizce yutar (hata da vermez), bu yüzden ZPL gönderilen işler
+    /// "Tamamlandı" görünüp hiç basılmaz.
+    ///
+    /// Rulo 100 x 80 mm (800 x 640 dot @ 203 dpi) varsayılıyor. Genişlik <c>q</c> ile veriliyor;
+    /// etiket boyu bilerek verilmiyor (<c>Q</c> yok) — yanlış gap değeri besleme hatası yapar,
+    /// yazıcının kendi kalibrasyonu daha güvenilir.
+    ///
+    /// Barkod tipi "3" = Code 128 Auto. Bu değer LP2844 firmware'inde kâğıt üzerinde
+    /// doğrulandı (2026-08-17): sec=3 ve sec=1 bastı, sec=0 (Code 39) basmadı.
+    ///
+    /// Türkçe: EPL2'nin varsayılan karakter seti Türkçe harfleri taşımıyor; doğru kod sayfası
+    /// ZPL tarafında zaten soruna yol açmış olan Encoding.GetEncoding(1254)'e bağımlı olurdu.
+    /// Bu yüzden metin ASCII'ye indirgeniyor (ALTINDAĞ → ALTINDAG). Depo etiketinde
+    /// okunabilirlik kaybı yok, kırılma riski sıfır.
+    /// </summary>
+    private static string BuildPalletEpl(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<PalletLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Palet payload parse edilemedi.");
+
+        if (string.IsNullOrWhiteSpace(p.PalletCode))
+            throw new InvalidDataException("Palet kodu boş — etiket basılamaz.");
+
+        // Barkod verisi ASCII kalmalı — Code128'e Türkçe harf girmesin.
+        var code = Ascii(p.PalletCode.Trim().ToUpperInvariant());
+
+        // Sığan en büyük çarpanı seç — kod hiçbir zaman kırpılmaz, küçülür
+        // (ZPL tarafındaki FitFont ile aynı mantık).
+        int mult = 3;
+        while (mult > 1 && code.Length * EplAdvance(32, mult) > EplContentWidth) mult--;
+
+        // Code128 dar bar genişliği: sığana kadar 3 → 2.
+        int narrow = 3;
+        while (narrow > 2 && Code128Width(code, narrow) > EplContentWidth) narrow--;
+        int barX = Math.Max(EplLeftMargin, (EplLabelWidth - Code128Width(code, narrow)) / 2);
+
+        var supplier = EplTruncate((p.SupplierName ?? string.Empty).Trim().ToUpper(TurkishCulture), 22);
+        var summary  = $"{p.LineCount} KALEM - {FormatQty(p.TotalQty)} ADET";
+
+        // Y koordinatları TOP_MARGIN'den başlar: rulo Yurtiçi Kargo baskılı ve üst
+        // banttaki logo kalıcı. İçerik y=0'dan başlarsa palet kodu logonun üstüne biner.
+        var lines = new List<string>
+        {
+            "N",
+            "q800",
+            EplCharsetLine,
+            $"A{EplLeftMargin},{EplTopMargin},0,5,{mult},{mult},N,\"{EplData(code)}\"",
+            $"LO{EplLeftMargin},{EplTopMargin + 110},{EplContentWidth},3",
+            $"A{EplLeftMargin},{EplTopMargin + 125},0,4,2,2,N,\"TARİH: {EplData(p.ReceivedDate)}\"",
+            $"A{EplLeftMargin},{EplTopMargin + 180},0,4,2,2,N,\"{EplData(summary)}\"",
+        };
+
+        // Tedarikçi adı boşsa satırı hiç üretme.
+        if (supplier.Length > 0)
+            lines.Add($"A{EplLeftMargin},{EplTopMargin + 235},0,4,2,2,N,\"{EplData(supplier)}\"");
+
+        // Tarama hedefi barkodun içeriği = PalletCode'un kendisi (parse yok).
+        lines.Add($"B{barX},{EplTopMargin + 295},0,3,{narrow},{narrow * 2},120,B,\"{EplData(code)}\"");
+        lines.Add("P1");
+
+        // EPL satır sonu CRLF olmalı.
+        return string.Join("\r\n", lines) + "\r\n";
+    }
+
+    /// <summary>
+    /// Kargo etiketi — EPL2 karşılığı. 76 x 51 mm (609 x 406 dot @ 203 dpi).
+    /// ZPL sürümüyle (BuildCargoZpl) aynı bilgi düzeni: barkod → alıcı → adres/telefon →
+    /// sevkiyat künyesi → gönderici satırı. Ölçüler EPL font matrislerine göre yeniden
+    /// hesaplandı, ZPL koordinatları birebir taşınmadı (font metrikleri farklı).
+    /// </summary>
+    private static string BuildCargoEpl(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<CargoLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
+
+        var barcode = Ascii((p.Barcode ?? string.Empty).Trim());   // Code128 verisi ASCII kalmalı
+        var name    = EplTruncate(p.ReceiverName.ToUpper(TurkishCulture), 20);
+        var address = EplTruncate(p.Address, 24);
+        var phone   = EplTruncate(p.Phone, 20);
+
+        // ZPL sürümü 76 x 51 mm stok içindi (^PW609). Sahadaki rulo 100 x 80 ve Yurtiçi
+        // baskılı: içerik hem etiketin tamamını kullanmalı hem üst banttaki logonun
+        // altından başlamalı — bu yüzden q800 + EplTopMargin.
+        var lines = new List<string> { "N", "q800", EplCharsetLine };
+        int y = EplTopMargin;
+
+        // Barkod boşsa B komutu hata verir — barkodsuz etiket basmak, hiç basmamaktan iyi.
+        if (barcode.Length > 0)
+        {
+            int narrow = 3;
+            while (narrow > 2 && Code128Width(barcode, narrow) > EplContentWidth) narrow--;
+            int barX = Math.Max(EplLeftMargin, (EplLabelWidth - Code128Width(barcode, narrow)) / 2);
+            lines.Add($"B{barX},{y},0,3,{narrow},{narrow * 2},110,N,\"{EplData(barcode)}\"");
+
+            int textX = Math.Max(EplLeftMargin, (EplLabelWidth - barcode.Length * EplAdvance(12, 1)) / 2);
+            lines.Add($"A{textX},{y + 118},0,3,1,1,N,\"{EplData(barcode)}\"");
+            y += 155;
+        }
+
+        lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
+        lines.Add($"A{EplLeftMargin},{y + 15},0,4,2,2,N,\"{EplData(name)}\"");
+        lines.Add($"A{EplLeftMargin},{y + 75},0,3,2,2,N,\"{EplData(address)}\"");
+        lines.Add($"A{EplLeftMargin},{y + 123},0,3,2,2,N,\"Tel: {EplData(phone)}\"");
+        lines.Add($"LO{EplLeftMargin},{y + 180},{EplContentWidth},3");
+        lines.Add($"A{EplLeftMargin},{y + 192},0,4,1,1,N,\"Sevkiyat: #{p.ShipmentId}  Tarih: {EplData(p.DeliveryDate)}\"");
+
+        if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
+            lines.Add($"A{EplLeftMargin},{y + 222},0,4,1,1,N,\"İrsaliye: {EplData(p.IrsaliyeNo)}\"");
+
+        // Gönderici satırı kısaltıldı: "A.Ş." ile birlikte 33 karakter ediyor ve font 4'ün
+        // 16 dot ilerlemesiyle YURTİÇİ KARGO yazısının üstüne biniyordu (kâğıtta görüldü).
+        lines.Add($"LO{EplLeftMargin},{y + 258},{EplContentWidth},3");
+        lines.Add($"A{EplLeftMargin},{y + 270},0,4,1,1,N,\"Gönderici: Akyıldız Lojistik\"");
+        lines.Add($"A520,{y + 270},0,4,1,1,N,\"YURTİÇİ KARGO\"");
+        lines.Add("P1");
+
+        return string.Join("\r\n", lines) + "\r\n";
+    }
+
+    /// <summary>
+    /// Koli etiketi — EPL2 karşılığı. 100 x 80 mm (800 x 640 dot @ 203 dpi).
+    /// ZPL sürümü gibi üç ortalanmış satır: proje adı · lokasyon · proje kodu (koli adedi).
+    /// EPL'de otomatik ortalama yok; x koordinatı font genişliğinden hesaplanıyor ve
+    /// metin taşarsa punto küçültülüyor — satır hiçbir zaman kırpılmaz.
+    /// </summary>
+    private static string BuildBoxEpl(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<BoxLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Koli payload parse edilemedi.");
+
+        var name = EplTruncate(p.ProjectName.ToUpper(TurkishCulture), 18);
+        var loc  = EplTruncate(p.Location.ToUpper(TurkishCulture),    18);
+        var code = $"{p.ProjectCode} ({p.BoxCount} KOLİ)";
+
+        var lines = new List<string>
+        {
+            "N",
+            "q800",
+            EplCharsetLine,
+            // Üst sınırlar ZPL sürümündeki punto hiyerarşisini korur (80 / 60 / 50):
+            // sınır olmasaydı kısa bir lokasyon adı proje adından büyük basılırdı.
+            EplCenteredLine(name, 110, 96),
+            EplCenteredLine(loc,  250, 72),
+            EplCenteredLine(code, 390, 48),
+            "P1",
+        };
+
+        return string.Join("\r\n", lines) + "\r\n";
+    }
+
+    /// <summary>
+    /// EPL metin kodlaması — DOS 857 (Türkçe). Kâğıt üzerinde doğrulandı (2026-08-17):
+    /// <c>I8,6,000</c> + CP857 baytlarıyla ÇĞİÖŞÜ/çğıöşü doğru bastı.
+    ///
+    /// .NET 10'da bu kod sayfası ancak <c>System.Text.Encoding.CodePages</c> sağlayıcısı
+    /// kaydedilirse gelir; kayıt yapılmadan <c>GetEncoding</c> fırlatır. Canlıdaki eski
+    /// "No data is available for encoding 1254" hatalarının sebebi tam olarak buydu —
+    /// o yüzden burada sessizce patlamak yerine null'a düşüp ASCII'ye geriliyoruz.
+    /// </summary>
+    private static readonly Encoding? EplEncoding = ResolveEplEncoding();
+
+    private static Encoding? ResolveEplEncoding()
+    {
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(857);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// EPL karakter seti satırı. Kod sayfası yüklenemediyse cihazı varsayılan
+    /// DOS 437'de bırakır ve metin ASCII'ye indirgenerek gönderilir (bkz. SendRawToPrinter).
+    /// </summary>
+    private static string EplCharsetLine => EplEncoding is not null ? "I8,6,000" : "I8,0,000";
+
+    /// <summary>
+    /// EPL etiketlerinde içeriğin başladığı üst kenar payı (dot, 203 dpi'de ~14 mm).
+    /// Sahadaki rulo Yurtiçi Kargo baskılı ve bu kalıcı: üst bantta basılı logo var,
+    /// içerik y=0'dan başlarsa onun üstüne biniyor (2026-08-17 palet baskısında görüldü).
+    /// </summary>
+    private const int EplTopMargin = 110;
+
+    private const int EplLabelWidth   = 800;   // 100 mm @ 203 dpi
+    private const int EplLeftMargin   = 40;
+    private const int EplContentWidth = 720;   // 800 − 40 sol − 40 sağ
+
+    /// <summary>
+    /// Bir karakterin yatay ilerlemesi. EPL font hücresine <b>2 dot</b> karakter arası
+    /// boşluk ekler ve bu da çarpanla büyür — hesaba katılmazsa metin sığıyor sanılır
+    /// ama kâğıtta taşar. 2026-08-17'de iki kez bu yüzden kırpıldı: koli etiketinde
+    /// satır soldan/sağdan kesildi, kargoda gönderici satırı "YURTİÇİ KARGO"nun üstüne bindi.
+    /// </summary>
+    private static int EplAdvance(int cellWidth, int mult) => (cellWidth + 2) * mult;
+
+    /// <summary>
+    /// (font, çarpan) merdiveni — büyükten küçüğe. EPL'de font hücreleri sabit olduğu için
+    /// tek bir fontu çarpanla büyütmek kaba adımlar veriyor (48 → 96 → 144 dot); araya
+    /// font 4 ve 3 girince ölçek yumuşuyor ve uzun metinler gereksiz yere küçülmüyor.
+    /// Değerler: (font, çarpan, karakter ilerlemesi, hücre yüksekliği) — genişlik
+    /// <see cref="EplAdvance"/> ile hesaplanmış hâlde tutuluyor.
+    /// </summary>
+    private static readonly (int Font, int Mult, int W, int H)[] EplFontLadder =
+    [
+        (5, 2, 68, 96),
+        (4, 3, 48, 72),
+        (5, 1, 34, 48),
+        (4, 2, 32, 48),
+        (3, 2, 28, 40),
+        (3, 1, 12, 20),
+    ];
+
+    /// <summary>
+    /// Ortalanmış tek satır. <paramref name="maxHeight"/> punto hiyerarşisini korur
+    /// (proje adı > lokasyon > kod), genişlik bütçesi ise kırpılmayı önler.
+    ///
+    /// Bütçe <see cref="EplContentWidth"/>: her yana 40 dot pay bırakır. Merdivendeki
+    /// genişlikler karakter arası boşluğu içeriyor (bkz. <see cref="EplAdvance"/>) —
+    /// eksik model yüzünden 2026-08-17'de satır kâğıtta kırpılmıştı.
+    /// </summary>
+    private static string EplCenteredLine(string text, int y, int maxHeight)
+    {
+        var pick = EplFontLadder.FirstOrDefault(
+            f => f.H <= maxHeight && text.Length * f.W <= EplContentWidth,
+            EplFontLadder[^1]);
+
+        int x = Math.Max(EplLeftMargin, (EplLabelWidth - text.Length * pick.W) / 2);
+        return $"A{x},{y},0,{pick.Font},{pick.Mult},{pick.Mult},N,\"{EplData(text)}\"";
+    }
+
+    /// <summary>Türkçe harfleri ASCII karşılığına indirger — EPL kod sayfası tuzağını atlar.</summary>
+    private static string Ascii(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var ch in s)
+            sb.Append(ch switch
+            {
+                'Ç' => "C", 'ç' => "c",
+                'Ğ' => "G", 'ğ' => "g",
+                'İ' => "I", 'ı' => "i",
+                'Ö' => "O", 'ö' => "o",
+                'Ş' => "S", 'ş' => "s",
+                'Ü' => "U", 'ü' => "u",
+                _   => ch.ToString(),
+            });
+        return sb.ToString();
+    }
+
+    /// <summary>EPL veri alanı kaçışı — tırnak ve ters bölü komutu bozar.</summary>
+    private static string EplData(string s) =>
+        s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>EPL için kısaltma — ZPL'de kullanılan '…' karakteri ASCII değil.</summary>
+    private static string EplTruncate(string s, int max) =>
+        s.Length <= max ? s : s[..(max - 2)] + "..";
+
     // ── Win32 Raw Print ───────────────────────────────────────────────────────
  
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
@@ -258,14 +537,22 @@ public class PrintAgentService
     [DllImport("winspool.Drv", EntryPoint = "WritePrinter",     SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
     private static extern bool WritePrinter(IntPtr h, IntPtr pBytes, int dwCount, out int dwWritten);
  
-    private static void SendZplToPrinter(string printerName, string zpl)
+    /// <summary>
+    /// Ham etiket verisini (ZPL ya da EPL) Windows spooler'ına RAW olarak yollar.
+    /// DİKKAT: bu çağrının başarılı dönmesi yalnızca "baytlar spooler'a teslim edildi"
+    /// demektir — cihazın basıp basmadığını söylemez. Yanlış dil gönderilirse iş
+    /// arayüzde "Tamamlandı" görünür ama kâğıt çıkmaz.
+    /// </summary>
+    private static void SendRawToPrinter(string printerName, string data, bool isEpl)
     {
-        // ZPL → UTF-8 (^CI28 ile eşleşir). NOT: GetEncoding(1254) .NET 10'da
-        // System.Text.Encoding.CodePages kaydı olmadan fırlatır ("No data is
-        // available for encoding 1254") — canlıdaki tüm baskı hatalarının kökü
-        // buydu. UTF-8 hem bu bağımlılığı kaldırır hem Türkçe karakterleri
-        // (İ, Ş, Ğ) Font 0 ile doğru basar.
-        var bytes = Encoding.UTF8.GetBytes(zpl);
+        // ZPL → UTF-8 (^CI28 ile eşleşir); Türkçe karakterleri Font 0 ile doğru basar.
+        // EPL → DOS 857 (etiketteki I8,6,000 satırıyla eşleşir).
+        // Kod sayfası sağlayıcısı yüklenemediyse EPL metni ASCII'ye indirgenir: etiket
+        // Türkçe harfsiz ama okunur çıkar. Sessizce bozuk karakter basmaktan iyidir.
+        byte[] bytes =
+            !isEpl                       ? Encoding.UTF8.GetBytes(data)
+            : EplEncoding is not null    ? EplEncoding.GetBytes(data)
+            :                              Encoding.ASCII.GetBytes(Ascii(data));
  
         if (!OpenPrinter(printerName, out IntPtr hPrinter, IntPtr.Zero))
             throw new InvalidOperationException($"Yazıcı açılamadı: {printerName} (Hata: {Marshal.GetLastWin32Error()})");

@@ -94,12 +94,43 @@ oluşturur. **Not:** `ServerUrl` **API** ana bilgisayarıdır (`api.` ön ekli),
 
 | Tip | Değer | Boyut | Notu |
 |-----|-------|-------|------|
-| Kargo Etiketi | 0 | 76 × 51 mm | `^PW609 ^LL406` |
-| Koli Etiketi | 1 | 100 × 80 mm | `^PW800 ^LL640` |
+| Kargo Etiketi | 0 | 76 × 51 mm | ZPL `^PW609 ^LL406` · EPL `q600` |
+| Koli Etiketi | 1 | 100 × 80 mm | ZPL `^PW800 ^LL640` · EPL `q800` |
 | Palet Etiketi | 2 | 100 × 80 mm | Koli ile **aynı rulo** — aynı yazıcı kullanılabilir |
 
 Her tip için ayrı `PrinterConfig` gerekir (aynı Windows yazıcısını gösterseler bile),
 çünkü iş oluşturma o tipin `IsDefault` kaydını arar.
+
+### Yazıcı dili — ZPL / EPL
+
+`PrinterConfig.Language` (0 = ZPL, 1 = EPL) hangi şablonun üretileceğini belirler.
+Arayüzde **Ayarlar → Yazıcılar → Yazıcı Dili** alanından seçilir.
+
+**Dil, sürücünün değil cihazın özelliğidir.** İş RAW gönderildiği için baytlar sürücüye
+dokunulmadan cihaza gider; hangi dili anladığını firmware belirler. Sürücü adında "EPL"
+yazması tek başına kanıt değildir.
+
+> **Zebra LP2844 yalnızca EPL konuşur.** ZPL komutlarını sessizce yutar — hata da vermez.
+> Yanlış dil seçilirse iş `Done` olur, arayüzde yeşil görünür, **kâğıt çıkmaz.**
+
+Depoda hangi dilin konuşulduğunu ölçmenin yolu (agent'ı ve API'yi devre dışı bırakır):
+
+```powershell
+Set-Printer -Name YKBARKOD -Shared $true -ShareName YKTEST
+"^XA^CI28^FO50,50^A0N,60,60^FDZPL TEST^FS^XZ" | Set-Content "$env:TEMP\zpl.txt" -Encoding Ascii -NoNewline
+"N`r`nq600`r`nA50,50,0,4,1,1,N,`"EPL TEST`"`r`nP1`r`n" | Set-Content "$env:TEMP\epl.txt" -Encoding Ascii -NoNewline
+cmd /c copy /b "%TEMP%\zpl.txt" "\\localhost\YKTEST"
+cmd /c copy /b "%TEMP%\epl.txt" "\\localhost\YKTEST"
+Set-Printer -Name YKBARKOD -Shared $false
+```
+
+Hangisi bastıysa cihazın dili odur. Aynı yöntem etiket yerleşimini deploy etmeden
+denemek için de kullanılır — dosyaya tam ZPL/EPL metnini yazıp gönderirsiniz.
+
+**EPL notları:** Türkçe karakterler ASCII'ye indirgenir (ALTINDAĞ → ALTINDAG); kod sayfası
+ayarına ve `Encoding.GetEncoding(1254)`'e hiç girilmez. Code 128 seçim kodu **"3"**
+(LP2844'te kâğıt üzerinde doğrulandı; "0"/Code 39 basmadı). Etiket boyu (`Q`) bilerek
+verilmez — yazıcının kendi kalibrasyonu kullanılır.
 
 ### Sürüm sırası — önemli
 
