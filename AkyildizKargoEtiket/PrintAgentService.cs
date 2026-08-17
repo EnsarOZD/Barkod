@@ -17,6 +17,7 @@ public record UpdateStatusRequest(int Status, string? ErrorMessage);
 public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
 public record PalletLabelPayload(string PalletCode, string ReceivedDate, string? SupplierName, int LineCount, decimal TotalQty);
+public record ProductLabelPayload(string Barcode, string StockCode, string StockName, string? Unit);
  
 // ── Print Service ─────────────────────────────────────────────────────────────
  
@@ -115,9 +116,12 @@ public class PrintAgentService
             (1, 0) => BuildBoxZpl(job),
             (2, 0) => BuildPalletZpl(job),
 
+            (3, 0) => BuildProductZpl(job),
+
             (0, 1) => BuildCargoEpl(job),
             (1, 1) => BuildBoxEpl(job),
             (2, 1) => BuildPalletEpl(job),
+            (3, 1) => BuildProductEpl(job),
 
             _ => throw new InvalidOperationException(
                 $"Desteklenmeyen kombinasyon: etiket tipi {job.LabelType}, dil " +
@@ -239,7 +243,81 @@ public class PrintAgentService
             ? string.Empty
             : $"\n^CF0,30\n^FO{CenterX(supplier, 800, 22)},502^FD{supplier}^FS";
  
+    /// <summary>
+    /// Ürün etiketi (ZPL) — 100 x 80 mm. Ambalajında üretici barkodu olmayan ürünlere
+    /// yapıştırılır: ürün adı · stok kodu · Code128(barkod).
+    /// </summary>
+    private static string BuildProductZpl(PendingJob job)
+    {
+        var p = ParseProduct(job);
+        var (nameFont, nameCharW) = FitFont(p.name, 720, 60, 50, 42, 34);
+
+        int module = 4;
+        while (module > 2 && Code128Width(p.barcode, module) > 740) module--;
+        int barcodeX = Math.Max(30, (800 - Code128Width(p.barcode, module)) / 2);
+
+        return $@"^XA
+^CI28
+^PW800
+^LL640
+^CF0,{nameFont}
+^FO{CenterX(p.name, 800, nameCharW)},60^FD{p.name}^FS
+^CF0,40
+^FO{CenterX(p.code, 800, 29)},{60 + nameFont + 30}^FD{p.code}^FS
+^FO40,{60 + nameFont + 90}^GB720,3,3^FS
+^FO{barcodeX},{60 + nameFont + 120}^BY{module}^BCN,170,Y,N,N^FD{p.barcode}^FS
+^XZ";
+    }
+
     // ── EPL Builders ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Ürün etiketi (EPL2) — 100 x 80 mm. ZPL sürümüyle aynı içerik.
+    /// Barkod tipi "3" = Code 128 Auto, insan-okur satır açık (son parametre B).
+    /// </summary>
+    private static string BuildProductEpl(PendingJob job)
+    {
+        var p = ParseProduct(job);
+
+        int narrow = 3;
+        while (narrow > 2 && Code128Width(p.barcode, narrow) > EplContentWidth) narrow--;
+        int barX = Math.Max(EplLeftMargin, (EplLabelWidth - Code128Width(p.barcode, narrow)) / 2);
+
+        var lines = new List<string>
+        {
+            "N",
+            "q800",
+            EplCharsetLine,
+            EplCenteredLine(p.name, EplTopMargin, 72),
+            EplCenteredLine(p.code, EplTopMargin + 90, 48),
+            $"LO{EplLeftMargin},{EplTopMargin + 150},{EplContentWidth},3",
+            $"B{barX},{EplTopMargin + 170},0,3,{narrow},{narrow * 2},150,B,\"{EplData(p.barcode)}\"",
+            "P1",
+        };
+
+        return string.Join("\r\n", lines) + "\r\n";
+    }
+
+    /// <summary>
+    /// Ürün etiketi payload'ını okur ve iki üretici için ortak alanları hazırlar.
+    /// Ürün adı iki satıra bölünmüyor — 26 karakterde kesiliyor; etikette barkodun
+    /// okunabilirliği ada göre öncelikli.
+    /// </summary>
+    private static (string barcode, string code, string name) ParseProduct(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<ProductLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Ürün payload parse edilemedi.");
+
+        var barcode = Ascii((p.Barcode ?? string.Empty).Trim());
+        if (barcode.Length == 0)
+            throw new InvalidDataException("Barkod boş — etiket basılamaz.");
+
+        var code = Ascii((p.StockCode ?? string.Empty).Trim().ToUpperInvariant());
+        var name = EplTruncate(Ascii((p.StockName ?? string.Empty).Trim().ToUpper(TurkishCulture)), 26);
+
+        return (barcode, code, name);
+    }
 
     /// <summary>
     /// Palet etiketi — EPL2. ZPL bilmeyen cihazlar için: Zebra LP2844 yalnızca EPL konuşur,
