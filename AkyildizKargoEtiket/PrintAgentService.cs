@@ -14,7 +14,8 @@ public record RegisterRequest(string AgentKey, string MachineName, string Displa
 /// <summary><c>Language</c>: 0 = ZPL, 1 = EPL. Eski API sürümü bu alanı göndermezse 0 kalır.</summary>
 public record PendingJob(int Id, int LabelType, string PayloadJson, string PrinterName, int Language = 0);
 public record UpdateStatusRequest(int Status, string? ErrorMessage);
-public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate);
+/// <summary><c>PieceNo</c>/<c>PieceTotal</c>: çok kolili gönderide "2/3" sırası. Eski API bunları göndermezse 1/1 kalır.</summary>
+public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate, int PieceNo = 1, int PieceTotal = 1);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
 public record PalletLabelPayload(string PalletCode, string ReceivedDate, string? SupplierName, int LineCount, decimal TotalQty);
 public record ProductLabelPayload(string Barcode, string StockCode, string StockName, string? Unit);
@@ -157,7 +158,7 @@ public class PrintAgentService
 ^FO20,168^A0N,20,20^FD{address}^FS
 ^FO20,195^A0N,20,20^FDTel: {phone}^FS
 ^FO20,220^GB569,1,2^FS
-^FO20,230^A0N,17,17^FDSevkiyat: #{p.ShipmentId}  Tarih: {p.DeliveryDate}^FS
+^FO20,230^A0N,17,17^FDSevkiyat: #{p.ShipmentId}  Tarih: {p.DeliveryDate}{PieceSuffix(p)}^FS
 ^FO20,252^A0N,17,17^FD{(string.IsNullOrWhiteSpace(p.IrsaliyeNo) ? "" : "İrsaliye: " + p.IrsaliyeNo)}^FS
 ^FO20,278^GB569,1,2^FS
 ^FO20,288^A0N,20,20^FDGönderici: Akyıldız Lojistik A.Ş.^FS
@@ -427,7 +428,7 @@ public class PrintAgentService
         lines.Add($"A{EplLeftMargin},{y + 75},0,3,2,2,N,\"{EplData(address)}\"");
         lines.Add($"A{EplLeftMargin},{y + 123},0,3,2,2,N,\"Tel: {EplData(phone)}\"");
         lines.Add($"LO{EplLeftMargin},{y + 180},{EplContentWidth},3");
-        lines.Add($"A{EplLeftMargin},{y + 192},0,4,1,1,N,\"Sevkiyat: #{p.ShipmentId}  Tarih: {EplData(p.DeliveryDate)}\"");
+        lines.Add($"A{EplLeftMargin},{y + 192},0,4,1,1,N,\"Sevkiyat: #{p.ShipmentId}  Tarih: {EplData(p.DeliveryDate)}{EplData(PieceSuffix(p))}\"");
 
         if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
             lines.Add($"A{EplLeftMargin},{y + 222},0,4,1,1,N,\"İrsaliye: {EplData(p.IrsaliyeNo)}\"");
@@ -557,6 +558,13 @@ public class PrintAgentService
         int x = Math.Max(EplLeftMargin, (EplLabelWidth - text.Length * pick.W) / 2);
         return $"A{x},{y},0,{pick.Font},{pick.Mult},{pick.Mult},N,\"{EplData(text)}\"";
     }
+
+    /// <summary>
+    /// Çok kolili gönderide "  Parça: 2/3" eki. Tek parçada hiçbir şey eklemez —
+    /// her gönderiye "1/1" yazmak etiketi gereksiz kalabalıklaştırır.
+    /// </summary>
+    private static string PieceSuffix(CargoLabelPayload p) =>
+        p.PieceTotal > 1 ? $"  Parca: {p.PieceNo}/{p.PieceTotal}" : string.Empty;
 
     /// <summary>Türkçe harfleri ASCII karşılığına indirger — EPL kod sayfası tuzağını atlar.</summary>
     private static string Ascii(string s)
