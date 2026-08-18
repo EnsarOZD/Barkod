@@ -15,7 +15,7 @@ public record RegisterRequest(string AgentKey, string MachineName, string Displa
 public record PendingJob(int Id, int LabelType, string PayloadJson, string PrinterName, int Language = 0);
 public record UpdateStatusRequest(int Status, string? ErrorMessage);
 /// <summary><c>PieceNo</c>/<c>PieceTotal</c>: çok kolili gönderide "2/3" sırası. Eski API bunları göndermezse 1/1 kalır.</summary>
-public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate, int PieceNo = 1, int PieceTotal = 1);
+public record CargoLabelPayload(string Barcode, string ReceiverName, string Address, string Phone, string? IrsaliyeNo, int ShipmentId, string DeliveryDate, int PieceNo = 1, int PieceTotal = 1, string? OrderNo = null);
 public record BoxLabelPayload(string ProjectName, string Location, string ProjectCode, int BoxCount);
 public record PalletLabelPayload(string PalletCode, string ReceivedDate, string? SupplierName, int LineCount, decimal TotalQty);
 public record ProductLabelPayload(string Barcode, string StockCode, string StockName, string? Unit);
@@ -199,6 +199,12 @@ public class PrintAgentService
         // ── Künye ────────────────────────────────────────────────────────
         sb.Append($"^FO40,{y}^A0N,24,24^FDSevkiyat: #{p.ShipmentId}   Tarih: {p.DeliveryDate}{PieceSuffix(p)}^FS\n");
         y += 28;
+
+        if (!string.IsNullOrWhiteSpace(p.OrderNo))
+        {
+            sb.Append($"^FO40,{y}^A0N,24,24^FDSipariş: {p.OrderNo}^FS\n");
+            y += 28;
+        }
 
         if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
         {
@@ -517,6 +523,12 @@ public class PrintAgentService
         // ── Künye ────────────────────────────────────────────────────────
         lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"Sevkiyat: #{p.ShipmentId}   Tarih: {EplData(p.DeliveryDate)}{EplData(PieceSuffix(p))}\"");
         y += 26;
+
+        if (!string.IsNullOrWhiteSpace(p.OrderNo))
+        {
+            lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"Sipariş: {EplData(p.OrderNo)}\"");
+            y += 26;
+        }
 
         if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
         {
