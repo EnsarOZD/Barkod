@@ -142,28 +142,78 @@ public class PrintAgentService
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
  
-        // Alıcı adını 25 karakterde kes — etiket taşmasın
-        var name    = Truncate(p.ReceiverName, 28);
-        var address = Truncate(p.Address,      40);
-        var phone   = Truncate(p.Phone,        20);
- 
-        return $@"^XA
-^CI28
-^PW609
-^LL406
-^FO20,15^BY3^BCN,70,N,N,N^FD{p.Barcode}^FS
-^FO20,95^A0N,18,18^FD{p.Barcode}^FS
-^FO20,125^GB569,1,2^FS
-^FO20,135^A0N,26,26^FD{name}^FS
-^FO20,168^A0N,20,20^FD{address}^FS
-^FO20,195^A0N,20,20^FDTel: {phone}^FS
-^FO20,220^GB569,1,2^FS
-^FO20,230^A0N,17,17^FDSevkiyat: #{p.ShipmentId}  Tarih: {p.DeliveryDate}{PieceSuffix(p)}^FS
-^FO20,252^A0N,17,17^FD{(string.IsNullOrWhiteSpace(p.IrsaliyeNo) ? "" : "İrsaliye: " + p.IrsaliyeNo)}^FS
-^FO20,278^GB569,1,2^FS
-^FO20,288^A0N,20,20^FDGönderici: Akyıldız Lojistik A.Ş.^FS
-^FO400,288^A0N,20,20^FDYURTIÇI KARGO^FS
-^XZ";
+        var name    = Truncate(p.ReceiverName.ToUpper(TurkishCulture), 26);
+        var phone   = Truncate(p.Phone, 24);
+        var address = WrapText(p.Address, 48, 2);
+
+        // Ekrandaki A4 etiketiyle aynı düzen: başlık → ALICI → barkod → künye → gönderici.
+        // Ölçü 100 x 80 mm (800 x 640 dot) — EPL sürümüyle aynı rulo.
+        var sb = new StringBuilder();
+        sb.Append("^XA\n^CI28\n^PW800\n^LL640\n");
+
+        int y = 40;
+
+        // ── Başlık ───────────────────────────────────────────────────────
+        sb.Append($"^FO40,{y}^A0N,44,44^FDAKYILDIZ LOJİSTİK^FS\n");
+        sb.Append($"^FO570,{y + 12}^A0N,24,24^FDYURTİÇİ KARGO^FS\n");
+        y += 58;
+        sb.Append($"^FO40,{y}^GB720,3,3^FS\n");
+        y += 16;
+
+        // ── Alıcı ────────────────────────────────────────────────────────
+        sb.Append($"^FO40,{y}^A0N,18,18^FDALICI^FS\n");
+        y += 24;
+        sb.Append($"^FO40,{y}^A0N,40,40^FD{name}^FS\n");
+        y += 50;
+        foreach (var line in address)
+        {
+            sb.Append($"^FO40,{y}^A0N,24,24^FD{line}^FS\n");
+            y += 28;
+        }
+        if (phone.Length > 0)
+        {
+            sb.Append($"^FO40,{y}^A0N,24,24^FDTel: {phone}^FS\n");
+            y += 28;
+        }
+
+        sb.Append($"^FO40,{y}^GB720,3,3^FS\n");
+        y += 14;
+
+        // ── Barkod ───────────────────────────────────────────────────────
+        if (!string.IsNullOrWhiteSpace(p.Barcode))
+        {
+            var code = p.Barcode.Trim();
+            int module = 4;
+            while (module > 2 && Code128Width(code, module) > 720) module--;
+            int barX = Math.Max(40, (800 - Code128Width(code, module)) / 2);
+
+            sb.Append($"^FO{barX},{y}^BY{module}^BCN,100,N,N,N^FD{code}^FS\n");
+            y += 108;
+            sb.Append($"^FO{CenterX(code, 800, 22)},{y}^A0N,26,26^FD{code}^FS\n");
+            y += 34;
+        }
+
+        sb.Append($"^FO40,{y}^GB720,3,3^FS\n");
+        y += 14;
+
+        // ── Künye ────────────────────────────────────────────────────────
+        sb.Append($"^FO40,{y}^A0N,24,24^FDSevkiyat: #{p.ShipmentId}   Tarih: {p.DeliveryDate}{PieceSuffix(p)}^FS\n");
+        y += 28;
+
+        if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
+        {
+            sb.Append($"^FO40,{y}^A0N,24,24^FDİrsaliye: {p.IrsaliyeNo}^FS\n");
+            y += 28;
+        }
+
+        sb.Append($"^FO40,{y}^GB720,3,3^FS\n");
+        y += 14;
+
+        // ── Gönderici ────────────────────────────────────────────────────
+        sb.Append($"^FO40,{y}^A0N,24,24^FDGÖNDERİCİ: Akyıldız Lojistik A.Ş.^FS\n");
+        sb.Append("^XZ");
+
+        return sb.ToString();
     }
  
     private static string BuildBoxZpl(PendingJob job)
@@ -400,44 +450,78 @@ public class PrintAgentService
             ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
 
         var barcode = Ascii((p.Barcode ?? string.Empty).Trim());   // Code128 verisi ASCII kalmalı
-        var name    = EplTruncate(p.ReceiverName.ToUpper(TurkishCulture), 20);
-        var address = EplTruncate(p.Address, 24);
-        var phone   = EplTruncate(p.Phone, 20);
+        var name    = EplTruncate(p.ReceiverName.ToUpper(TurkishCulture), 26);
+        var phone   = EplTruncate(p.Phone, 24);
 
-        // ZPL sürümü 76 x 51 mm stok içindi (^PW609). Sahadaki rulo 100 x 80 ve Yurtiçi
-        // baskılı: içerik hem etiketin tamamını kullanmalı hem üst banttaki logonun
-        // altından başlamalı — bu yüzden q800 + EplTopMargin.
+        // Adres iki satıra bölünüyor: tek satırda 25 karakterde kesiliyordu ve sokak
+        // bilgisi kayboluyordu. Font 3 / 1x ile satır başına ~50 karakter sığıyor.
+        var addressLines = WrapText(p.Address, 48, 2);
+
+        // Ekrandaki A4 etiketiyle aynı düzen: başlık → ALICI → barkod → künye → gönderici.
+        // Ölçü 100 x 80 mm (800 x 640 dot). İçerik EplTopMargin'den başlar; rulo Yurtiçi
+        // baskılı ve üst bantta basılı logo var.
         var lines = new List<string> { "N", "q800", EplCharsetLine };
         int y = EplTopMargin;
 
-        // Barkod boşsa B komutu hata verir — barkodsuz etiket basmak, hiç basmamaktan iyi.
+        // ── Başlık: marka + kargo firması ────────────────────────────────
+        lines.Add($"A{EplLeftMargin},{y},0,4,2,2,N,\"AKYILDIZ LOJİSTİK\"");
+        lines.Add($"A560,{y + 12},0,3,1,1,N,\"YURTİÇİ KARGO\"");
+        y += 56;
+        lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
+        y += 14;
+
+        // ── Alıcı ────────────────────────────────────────────────────────
+        lines.Add($"A{EplLeftMargin},{y},0,2,1,1,N,\"ALICI\"");
+        y += 22;
+        lines.Add($"A{EplLeftMargin},{y},0,4,2,2,N,\"{EplData(name)}\"");
+        y += 52;
+        foreach (var line in addressLines)
+        {
+            lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"{EplData(line)}\"");
+            y += 26;
+        }
+        if (phone.Length > 0)
+        {
+            lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"Tel: {EplData(phone)}\"");
+            y += 26;
+        }
+
+        lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
+        y += 12;
+
+        // ── Barkod ───────────────────────────────────────────────────────
+        // Boşsa B komutu hata verir; barkodsuz etiket basmak hiç basmamaktan iyidir.
         if (barcode.Length > 0)
         {
             int narrow = 3;
             while (narrow > 2 && Code128Width(barcode, narrow) > EplContentWidth) narrow--;
             int barX = Math.Max(EplLeftMargin, (EplLabelWidth - Code128Width(barcode, narrow)) / 2);
-            lines.Add($"B{barX},{y},0,3,{narrow},{narrow * 2},110,N,\"{EplData(barcode)}\"");
+            lines.Add($"B{barX},{y},0,3,{narrow},{narrow * 2},100,N,\"{EplData(barcode)}\"");
+            y += 106;
 
             int textX = Math.Max(EplLeftMargin, (EplLabelWidth - barcode.Length * EplAdvance(12, 1)) / 2);
-            lines.Add($"A{textX},{y + 118},0,3,1,1,N,\"{EplData(barcode)}\"");
-            y += 155;
+            lines.Add($"A{textX},{y},0,3,1,1,N,\"{EplData(barcode)}\"");
+            y += 30;
         }
 
         lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
-        lines.Add($"A{EplLeftMargin},{y + 15},0,4,2,2,N,\"{EplData(name)}\"");
-        lines.Add($"A{EplLeftMargin},{y + 75},0,3,2,2,N,\"{EplData(address)}\"");
-        lines.Add($"A{EplLeftMargin},{y + 123},0,3,2,2,N,\"Tel: {EplData(phone)}\"");
-        lines.Add($"LO{EplLeftMargin},{y + 180},{EplContentWidth},3");
-        lines.Add($"A{EplLeftMargin},{y + 192},0,4,1,1,N,\"Sevkiyat: #{p.ShipmentId}  Tarih: {EplData(p.DeliveryDate)}{EplData(PieceSuffix(p))}\"");
+        y += 12;
+
+        // ── Künye ────────────────────────────────────────────────────────
+        lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"Sevkiyat: #{p.ShipmentId}   Tarih: {EplData(p.DeliveryDate)}{EplData(PieceSuffix(p))}\"");
+        y += 26;
 
         if (!string.IsNullOrWhiteSpace(p.IrsaliyeNo))
-            lines.Add($"A{EplLeftMargin},{y + 222},0,4,1,1,N,\"İrsaliye: {EplData(p.IrsaliyeNo)}\"");
+        {
+            lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"İrsaliye: {EplData(p.IrsaliyeNo)}\"");
+            y += 26;
+        }
 
-        // Gönderici satırı kısaltıldı: "A.Ş." ile birlikte 33 karakter ediyor ve font 4'ün
-        // 16 dot ilerlemesiyle YURTİÇİ KARGO yazısının üstüne biniyordu (kâğıtta görüldü).
-        lines.Add($"LO{EplLeftMargin},{y + 258},{EplContentWidth},3");
-        lines.Add($"A{EplLeftMargin},{y + 270},0,4,1,1,N,\"Gönderici: Akyıldız Lojistik\"");
-        lines.Add($"A520,{y + 270},0,4,1,1,N,\"YURTİÇİ KARGO\"");
+        lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
+        y += 12;
+
+        // ── Gönderici ────────────────────────────────────────────────────
+        lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"GÖNDERİCİ: Akyıldız Lojistik A.Ş.\"");
         lines.Add("P1");
 
         return string.Join("\r\n", lines) + "\r\n";
@@ -557,6 +641,46 @@ public class PrintAgentService
 
         int x = Math.Max(EplLeftMargin, (EplLabelWidth - text.Length * pick.W) / 2);
         return $"A{x},{y},0,{pick.Font},{pick.Mult},{pick.Mult},N,\"{EplData(text)}\"";
+    }
+
+    /// <summary>
+    /// Uzun metni kelime sınırından satırlara böler. Adres gibi alanlar tek satıra
+    /// sığmıyor ve ortadan kesilince sokak bilgisi kayboluyor.
+    /// <paramref name="maxLines"/> aşılırsa son satır "…" yerine ".." ile biter (ASCII).
+    /// </summary>
+    private static List<string> WrapText(string? text, int lineLength, int maxLines)
+    {
+        var result = new List<string>();
+        var clean = (text ?? string.Empty).Trim();
+        if (clean.Length == 0) return result;
+
+        var words = clean.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var current = new StringBuilder();
+
+        foreach (var word in words)
+        {
+            if (current.Length > 0 && current.Length + 1 + word.Length > lineLength)
+            {
+                result.Add(current.ToString());
+                current.Clear();
+                if (result.Count == maxLines) break;
+            }
+            if (current.Length > 0) current.Append(' ');
+            current.Append(word);
+        }
+
+        if (result.Count < maxLines && current.Length > 0)
+            result.Add(current.ToString());
+
+        // Sığmayan kısım kaldıysa son satırın devamı olduğunu belli et.
+        var used = result.Sum(l => l.Length + 1);
+        if (used < clean.Length && result.Count > 0)
+        {
+            var last = result[^1];
+            result[^1] = last.Length > lineLength - 2 ? last[..(lineLength - 2)] + ".." : last + "..";
+        }
+
+        return result;
     }
 
     /// <summary>
