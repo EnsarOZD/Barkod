@@ -142,7 +142,7 @@ public class PrintAgentService
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
  
-        var name    = Truncate(p.ReceiverName.ToUpper(TurkishCulture), 26);
+        var name    = Truncate(p.ReceiverName.ToUpper(TurkishCulture), 34);
         var phone   = Truncate(p.Phone, 24);
         var address = WrapText(p.Address, 48, 2);
 
@@ -154,8 +154,8 @@ public class PrintAgentService
         int y = 40;
 
         // ── Başlık ───────────────────────────────────────────────────────
+        // Kargo firması yazılmıyor: rulo zaten baskılı, üst bantta logosu var.
         sb.Append($"^FO40,{y}^A0N,44,44^FDAKYILDIZ LOJİSTİK^FS\n");
-        sb.Append($"^FO570,{y + 12}^A0N,24,24^FDYURTİÇİ KARGO^FS\n");
         y += 58;
         sb.Append($"^FO40,{y}^GB720,3,3^FS\n");
         y += 16;
@@ -210,7 +210,7 @@ public class PrintAgentService
         y += 14;
 
         // ── Gönderici ────────────────────────────────────────────────────
-        sb.Append($"^FO40,{y}^A0N,24,24^FDGÖNDERİCİ: Akyıldız Lojistik A.Ş.^FS\n");
+        sb.Append($"^FO40,{y}^A0N,24,24^FDGÖNDERİCİ: Akyıldız Lojistik^FS\n");
         sb.Append("^XZ");
 
         return sb.ToString();
@@ -450,7 +450,7 @@ public class PrintAgentService
             ?? throw new InvalidDataException("Kargo payload parse edilemedi.");
 
         var barcode = Ascii((p.Barcode ?? string.Empty).Trim());   // Code128 verisi ASCII kalmalı
-        var name    = EplTruncate(p.ReceiverName.ToUpper(TurkishCulture), 26);
+        var name    = EplTruncate(p.ReceiverName.ToUpper(TurkishCulture), 44);
         var phone   = EplTruncate(p.Phone, 24);
 
         // Adres iki satıra bölünüyor: tek satırda 25 karakterde kesiliyordu ve sokak
@@ -463,9 +463,9 @@ public class PrintAgentService
         var lines = new List<string> { "N", "q800", EplCharsetLine };
         int y = EplTopMargin;
 
-        // ── Başlık: marka + kargo firması ────────────────────────────────
+        // ── Başlık ───────────────────────────────────────────────────────
+        // Kargo firması yazılmıyor: rulo zaten Yurtiçi baskılı, üst bantta logosu var.
         lines.Add($"A{EplLeftMargin},{y},0,4,2,2,N,\"AKYILDIZ LOJİSTİK\"");
-        lines.Add($"A560,{y + 12},0,3,1,1,N,\"YURTİÇİ KARGO\"");
         y += 56;
         lines.Add($"LO{EplLeftMargin},{y},{EplContentWidth},3");
         y += 14;
@@ -473,8 +473,15 @@ public class PrintAgentService
         // ── Alıcı ────────────────────────────────────────────────────────
         lines.Add($"A{EplLeftMargin},{y},0,2,1,1,N,\"ALICI\"");
         y += 22;
-        lines.Add($"A{EplLeftMargin},{y},0,4,2,2,N,\"{EplData(name)}\"");
-        y += 52;
+
+        // Font 4 / 2x'te karakter 32 dot ilerliyor; 26 karakter 832 dot eder ve
+        // 800'lük etikette kırpılır (kâğıtta görüldü: adın ilk hanesi yarım bastı).
+        // Sığmıyorsa 1x'e düşülüyor — ad kırpılmaktansa küçülsün.
+        var nameFits2x = name.Length * EplAdvance(14, 2) <= EplContentWidth;
+        lines.Add(nameFits2x
+            ? $"A{EplLeftMargin},{y},0,4,2,2,N,\"{EplData(name)}\""
+            : $"A{EplLeftMargin},{y},0,4,1,1,N,\"{EplData(name)}\"");
+        y += nameFits2x ? 52 : 30;
         foreach (var line in addressLines)
         {
             lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"{EplData(line)}\"");
@@ -521,7 +528,7 @@ public class PrintAgentService
         y += 12;
 
         // ── Gönderici ────────────────────────────────────────────────────
-        lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"GÖNDERİCİ: Akyıldız Lojistik A.Ş.\"");
+        lines.Add($"A{EplLeftMargin},{y},0,3,1,1,N,\"GÖNDERİCİ: Akyıldız Lojistik\"");
         lines.Add("P1");
 
         return string.Join("\r\n", lines) + "\r\n";
