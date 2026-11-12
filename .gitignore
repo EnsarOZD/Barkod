@@ -1,0 +1,17 @@
+# Derleme ciktilari — yeniden uretilebilir, git'te durmasina gerek yok.
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio / Rider kullanici dosyalari
+.vs/
+.idea/
+*.user
+*.suo
+
+# Config yedekleri (update-service.ps1 zaman damgali birakiyor)
+appsettings.backup-*.json
+
+# NOT: publish/ KASITLI olarak izlenmeye devam ediyor — depo PC'sine tasima
+# yolu olabilir. Guvenli, cunku publish.ps1 yayin ciktisindan appsettings.json'i
+# cikarip appsettings.example.json birakiyor; depo PC'sindeki gercek AgentKey
+# hicbir kopyalamada ezilmiyor. Ayrinti: AkyildizKargoEtiket/DEPLOY.md
