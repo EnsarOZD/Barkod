@@ -9,6 +9,25 @@ yoklar, bekleyen baskı işini alır, ZPL üretip Win32 `winspool` ile yazıcıy
 
 ---
 
+## Hızlı yol — tek komut (12.11.2026)
+
+**Geliştirme makinesi:** `.\publish.ps1` → `publish\` klasörünü commit'le → `main`'e gönder.
+(`publish\` git'te tutulur; depo PC'si derlenmiş dosyaları GitHub'dan indirir.)
+
+**Depo PC'si** (Yönetici PowerShell) — hem ilk kurulum hem güncelleme:
+
+```powershell
+irm https://raw.githubusercontent.com/EnsarOZD/Barkod/main/AkyildizKargoEtiket/guncelle.ps1 | iex
+```
+
+`guncelle.ps1`: `main` zip'ini indirir → kurulu servisin klasörünü servis kaydından bulur →
+`appsettings.json`'ı yedekler ve **ezmez** → servisi durdur / kopyala / başlat / doğrula.
+Servis yoksa ilk kurulumu yapar (AgentKey'i sorar). Dal denemek için önce
+`$env:AJAN_DAL = "feat/..."`. Repo herkese açık: AgentKey yalnız depo PC'sindeki
+`appsettings.json`'da durur, git'e girmez. Aşağıdaki elle kopyalama yolu hâlâ geçerli.
+
+---
+
 ## ⚠️ Tek büyük tuzak: `appsettings.json`
 
 `POST /api/print/agents/register` **anonim** ve **herhangi bir `AgentKey`'i kabul edip

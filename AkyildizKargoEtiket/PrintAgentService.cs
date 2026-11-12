@@ -315,12 +315,104 @@ public class PrintAgentService
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Koli etiketi, ZPL — CATERING MICRO KOLİ tasarımı (12.11.2026, "Catering Koli Etiketi.dc.html", 1 px = 1 dot),
+    /// 100 x 80 mm (800 x 640 dot @ 203 dpi, mevcut rulo). ZPL koli işini bugün yalnız "Catering Micro Koli" yazıcısı
+    /// (ZEBRA-251-KOLI) alıyor; kıyafet kolisi EPL yazıcıda (YKBARKOD) <see cref="BuildBoxEpl"/> ile basılır, değişmedi.
+    /// Kıyafet için ZPL koli yazıcısı tanımlanırsa o da bu tasarımı alır — o gün payload'a tür işareti eklenmeli.
+    /// Tasarımdan sapma: dikey logo 84 dot (58'de "LOJİSTİK" okunmuyordu) → üst şerit 100 yerine 124, ad alanı 312.
+    /// Eski ZPL yerleşimi aşağıda <see cref="BuildBoxZplEski"/> (çağrılmıyor, geri dönüş için).
+    /// </summary>
     private static string BuildBoxZpl(PendingJob job)
     {
         var p = JsonSerializer.Deserialize<BoxLabelPayload>(job.PayloadJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Koli payload parse edilemedi.");
- 
+
+        // ToUpperInvariant "i" → "I" yapıyor (RAFINERISI); doğrusu tr-TR → "İ".
+        var name = p.ProjectName.Trim().ToUpper(TurkishCulture);
+        var loc  = Truncate(p.Location.Trim().ToUpper(TurkishCulture), 20);    // BirimSatiriSiniri
+        var code = (p.ProjectCode ?? string.Empty).Trim().ToUpper(TurkishCulture);
+        var koli = p.BoxNo > 0 ? $"{p.BoxNo}/{p.BoxCount}" : $"{p.BoxCount}";
+
+        // Proje adı ASLA kırpılmaz. Alan: 760 x 312 dot. Önce 2 satıra sığan en büyük punto,
+        // sığmazsa 3 satır (≤ 96). En küçük puntoda da sığmazsa ^FB 4 satıra izin verir.
+        // Genişlik tahmini 0,66 x punto; basılan ^A0 genişlik parametresi de 0,66 x punto → gerçek ilerleme
+        // ≈ 0,74 x 0,66 x punto (bkz. FitFont) — tahmin ihtiyatlı, satır taşmaz.
+        const int NameW = 760, NameH = 312;
+        int nameFont = 48, nameLines = 4;
+        foreach (var f in new[] { 160, 144, 128, 116, 104, 96, 88, 80, 72, 64, 56, 48 })
+        {
+            int cw = (int)Math.Round(f * 0.66);
+            int lines = f > 96 ? 2 : 3;
+            if (FitsLines(name, NameW, cw, lines) && lines * f <= NameH) { nameFont = f; nameLines = lines; break; }
+        }
+        int nameCw = (int)Math.Round(nameFont * 0.66);
+
+        // Bölge punto: 20 karakter kutuya (440 dot) sığana kadar küçült.
+        var (locFont, _) = FitFont(loc, 440, 60, 52, 44, 38);
+
+        // Barkod: 12 hane sayısal → Code128 C. Hücre 20..456 (436 dot); yalnız terminal okutması için.
+        var bc = p.Barcode?.Trim() ?? string.Empty;
+        int module = 3;
+        int BcW(int m) => (11 * (bc.Length / 2 + 2) + 13) * m;
+        while (module > 2 && BcW(module) > 420) module--;
+        int bcX = 20 + Math.Max(0, (436 - BcW(module)) / 2);
+
+        var sb = new StringBuilder();
+        sb.Append("^XA\n^CI28\n^PW800\n^LL640\n^LH0,0\n");
+
+        // ── Üst şerit (0–124): dikey logo + CATERING solda, BÖLGE siyah kutuda sağda
+        sb.Append(CateringKoliLogo.Zpl(24, 6));                                        // 112 x 84 → y 6..90
+        sb.Append("^FO24,96^GB112,24,2^FS\n^FO24,100^FB112,1,0,C^A0N,16,14^FDCATERING^FS\n");
+        sb.Append("^FO180,0^GB620,124,124^FS\n");
+        sb.Append("^FO180,16^FB602,1,0,R^A0N,20,18^FR^FDBÖLGE^FS\n");
+        sb.Append($"^FO180,{48 + (60 - locFont) / 2}^FB602,1,0,R^A0N,{locFont},{(int)(locFont * 0.82)}^FR^FD{loc}^FS\n");
+        sb.Append("^FO0,124^GB800,4,4^FS\n");
+
+        // ── Proje adı (128–484) — tam genişlik, etiketin ana bilgisi
+        sb.Append("^FO20,138^A0N,20,18^FDPROJE^FS\n");
+        int nameY = 166 + Math.Max(0, (NameH - nameLines * nameFont) / 2);
+        sb.Append($"^FO20,{nameY}^FB{NameW},{nameLines},0,L^A0N,{nameFont},{nameCw}^FD{name}^FS\n");
+        sb.Append("^FO0,484^GB800,4,4^FS\n");
+
+        // ── Alt şerit (488–640): barkod | proje kodu | koli
+        if (bc.Length > 0)
+        {
+            sb.Append($"^FO{bcX},506^BY{module}^BCN,76,N,N,N,A^FD{bc}^FS\n");
+            sb.Append($"^FO20,592^FB436,1,0,C^A0N,22,18^FD{bc}^FS\n");
+        }
+        sb.Append("^FO476,488^GB4,152,4^FS\n");
+        sb.Append("^FO480,528^FB150,1,0,C^A0N,18,16^FDPROJE KODU^FS\n");
+        sb.Append($"^FO480,556^FB150,1,0,C^A0N,30,24^FD{code}^FS\n");
+        sb.Append("^FO630,488^GB4,152,4^FS\n");
+        sb.Append("^FO634,506^FB166,1,0,C^A0N,18,16^FDKOLİ^FS\n");
+        sb.Append($"^FO634,534^FB166,1,0,C^A0N,76,{(koli.Length > 5 ? 40 : 52)}^FD{koli}^FS\n");
+
+        sb.Append("^XZ");
+        return sb.ToString();
+    }
+
+    /// <summary>Sözcük kaydırmalı satır sayısı tahmini — Font 0 genişliği ≈ charWidth/karakter.</summary>
+    private static bool FitsLines(string text, int width, int charWidth, int maxLines)
+    {
+        int perLine = Math.Max(1, width / charWidth), lines = 1, used = 0;
+        foreach (var w in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (w.Length > perLine) return false;
+            int need = used == 0 ? w.Length : used + 1 + w.Length;
+            if (need <= perLine) used = need; else { lines++; used = w.Length; }
+        }
+        return lines <= maxLines;
+    }
+
+    /// <summary>Eski ZPL koli yerleşimi (EPL ile ortak) — 12.11.2026'ya kadar. Çağrılmıyor; geri dönüş için duruyor.</summary>
+    private static string BuildBoxZplEski(PendingJob job)
+    {
+        var p = JsonSerializer.Deserialize<BoxLabelPayload>(job.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Koli payload parse edilemedi.");
+
         // EPL sürümüyle AYNI yerleşim — sabitler tek yerden (Box* alanları) okunuyor,
         // iki dil arasında kayma olmasın. Tek fark punto ölçüsü: ZPL'de font 0
         // ölçeklenebilir ve karakter genişliği ≈ punto x 0,74 (bkz. FitFont).
